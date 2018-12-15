@@ -1,0 +1,189 @@
+---
+title: "Exploratory analysis pipeline"
+author: "German Novakovskiy"
+date: "December 14, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, results='hide'}
+library(BiocParallel)
+library(clusterExperiment)
+library(scone)
+library(zinbwave)
+
+library(slingshot)
+library(doParallel)
+library(gam)
+library(RColorBrewer)
+library(dplyr)
+library(edgeR)
+library(scater)
+
+#for feature-barcode-matrix loading
+library(Matrix)
+```
+[10X Genomics](https://ucdavis-bioinformatics-training.github.io/2017_2018-single-cell-RNA-sequencing-Workshop-UCD_UCB_UCSF/day1/Expression_Matrix.html)
+
+Analysis of Francis's data: differentiation of hESC towards DE; one time point - 36 hours. 
+
+Samples:
+
+Sox17-mNeonGreen H1 cells, 24h culture w/ Activin A+CHIR -> 12h culture Activin A+1/10CHIR;
+
+Day 1:  RB + 0.2% FBS + 1:5000 ITS +100ng/mL Activin A + 3uM CHIR99021
+
+Next 12 hours: RB + 0.2% FBS + 1:2000 ITS +100ng/mL Activin A + 0.3uM CHIR99021
+
+*RB: RPMI1640 + 1x Glutamax + 1/200 Penicillin/Streptomycin
+
+Process:
+
+- Added mNeonGreen into GRCh38 as reference
+
+(Follow the instruction on 10xGenomics)
+
+- Run cellranger mkfastq
+
+- Run cellranger count
+
+The 10X Genomics workflow for single cell RNA-seq is shown [here](https://community.10xgenomics.com/t5/10x-Blog/Single-Cell-RNA-Seq-An-Introductory-Overview-and-Tools-for/ba-p/547).
+
+## Pre-processing
+
+Information about input data formats can be found [here](https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/output/matrices).
+
+MEX matrix is sparse matrix. I have 33539 genes and 6320 cells (barcode of which was identified), overall it's 33539*6320 matrix with 211966480 elements. However, matrix.mtx.gz contains pointers only to non-zero elements: 15780312 (7.5%).
+
+Note: There is a problem in the pipeline: Low Fraction Reads in Cells (50.2%). Ideal > 70%. Application performance may be affected. Many of the reads were not assigned to cell-associated barcodes. This could be caused by high levels of ambient RNA or by a significant population of cells with a low RNA content, which the algorithm did not call as cells. 
+
+Loading the data:
+```{r}
+#getwd()
+#UMI counts are not normalized
+matrix_dir <-  "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/"
+
+barcode.path <- paste0(matrix_dir, "barcodes.tsv.gz")
+features.path <- paste0(matrix_dir, "features.tsv.gz")
+matrix.path <- paste0(matrix_dir, "matrix.mtx.gz")
+
+mat <- readMM(file = matrix.path)
+feature.names <- read.delim(features.path, 
+                           header = FALSE,
+                           stringsAsFactors = FALSE)
+barcode.names <-  read.delim(barcode.path, 
+                           header = FALSE,
+                           stringsAsFactors = FALSE)
+
+colnames(mat) <-  barcode.names$V1
+rownames(mat) <-  feature.names$V1
+
+#doing all this in one line
+#read10X(mtx = "../Sox17Ng_36h_German/filtered_feature_bc_matrix/matrix.mtx.gz", genes = #"../Sox17Ng_36h_German/filtered_feature_bc_matrix/features.tsv.gz", barcodes = #"../Sox17Ng_36h_German/filtered_feature_bc_matrix/barcodes.tsv.gz", path = NULL, DGEList = FALSE)
+```
+
+Mat is sparse matrix that has only positions of non-zero elements
+```{r}
+# Remove undetected genes
+mat <- na.omit(mat)
+mat <- mat[rowSums(mat)>0,]
+dim(mat)
+```
+
+We (probably) didn't use any spike-ins. 
+```{r}
+se <- SingleCellExperiment(assays = list(counts = mat))
+se
+```
+```{r}
+#converting gene column to actual gene symbols (removing GRCh38____)
+x <- sapply(feature.names$V2, function(x){unlist(strsplit(x, split = "_____", fixed=TRUE))[2]})
+names(x) <- NULL
+x[1] <- "mNeonGreen"
+feature.names$V4 <- x
+rm(x)
+```
+
+Define control features (genes) - mitochondrial genes (and we don't have ERCC spike-ins).
+```{r}
+mitochondrial_genes <- c("GRCh38_____ENSG00000198899", "GRCh38_____ENSG00000198727", "GRCh38_____ENSG00000198888",
+    "GRCh38_____ENSG00000198886", "GRCh38_____ENSG00000212907", "GRCh38_____ENSG00000198786",
+    "GRCh38_____ENSG00000198695", "GRCh38_____ENSG00000198712", "GRCh38_____ENSG00000198804",
+    "GRCh38_____ENSG00000198763", "GRCh38_____ENSG00000228253", "GRCh38_____ENSG00000198938",
+    "GRCh38_____ENSG00000198840")
+
+
+isSpike(se, "MT") <- rownames(se) %in% mitochondrial_genes
+```
+
+Calculate the quality metrics:
+```{r}
+se <- calculateQCMetrics(
+    se,
+    feature_controls = list( 
+        MT = isSpike(se, "MT")
+    )
+)
+```
+Next we consider the total number of RNA molecules (since we have UMI here) detected per sample. Wells with few reads/molecules are likely to have been broken or failed to capture a cell, and should thus be removed.
+```{r}
+hist(
+    se$total_counts,
+    breaks = 100
+)
+abline(v = 10000, col = "red")
+```
+(2700 cells have UMI counts more than 10000...).
+
+In addition to ensuring sufficient sequencing depth for each sample, we also want to make sure that the reads are distributed across the transcriptome. Thus, we count the total number of unique genes detected in each sample.
+```{r}
+hist(
+    se$total_features_by_counts_endogenous,
+    breaks = 100
+)
+abline(v = 3000, col = "red")
+```
+
+Ratio between MT gene RNAs and endogenous RNAs:
+```{r}
+plotPhenoData(se, x="total_features_by_counts_endogenous", y="pct_counts_MT")
+```
+
+
+Using scone, I  remove  low-quality  cells  according  to  the  quality  control  filter implemented  in  the  function 
+metric_sample_filter and  based  on  the  following  criteria:  
+1. Filter  out samples with low total number of reads or low alignment percentage; 
+2. Filter out samples with a low detection rate for housekeeping genes.
+
+Note: we are using UMI counts. Each transcript molecule can only produce one UMI count but can yield many reads after fragmentation. Thus, we see lower amount of UMI counts than read counts (83,374,678 UMI counts compared to 455,682,211):
+```{r}
+data("housekeeping")
+
+#converting gene column to actual gene symbols (removing GRCh38____)
+x <- sapply(feature.names$V2, function(x){unlist(strsplit(x, split = "_____", fixed=TRUE))[2]})
+names(x) <- NULL
+x[1] <- "mNeonGreen"
+feature.names$V4 <- x
+rm(x)
+
+#extracting ENSEMBLE gene symbols for housekeeping genes
+x <- feature.names %>% filter(V4 %in% housekeeping$V1) %>% select(V1) 
+hk <- rownames(se)[rownames(se) %in% x$V1]
+
+expr <- assay(se)
+pos_controls <- rownames(expr) %in% hk
+
+mfilt <- metric_sample_filter(expr, nreads = colSums(expr), #pos_controls = pos_controls, 
+                              zcut = 3, mixture = FALSE, plot = TRUE)
+```
+```{r}
+rm(expr)
+# Simplify to a single logical
+mfilt <- !apply(simplify2array(mfilt[!is.na(mfilt)]), 1, any)
+se <- se[, mfilt]
+dim(se)
+```
+
