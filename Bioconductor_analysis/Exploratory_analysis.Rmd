@@ -144,12 +144,46 @@ hist(
     se$total_features_by_counts_endogenous,
     breaks = 100
 )
-abline(v = 3000, col = "red")
+abline(v = 1000, col = "red")
 ```
+(2655 cells have more than 3000 of identified genes...).
 
 Ratio between MT gene RNAs and endogenous RNAs:
 ```{r}
-plotPhenoData(se, x="total_features_by_counts_endogenous", y="pct_counts_MT")
+plotColData(se, x="total_features_by_counts_endogenous", y="pct_counts_MT")
+#abline(h = 10, col = "red")
+```
+We see that there is a big fraction of cells, with high expression of mitochondrial genes (>10% of total counts in a cell). Here
+is the [reference](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-016-0888-1) of why it's bad:
+
+There is an extensive literature on the relationship between mtDNA, mitochondrially localized proteins, and cell death [34, 35]. However, upregulation of RNA levels of mtDNA in broken cells suggests losses in cytoplasmic content. In a situation where cell membrane is broken, cytoplasmic RNA will be lost, but RNAs enclosed in the mitochondria will be retained.
+
+```{r}
+#removing cells where >10% of total counts in a cell are MT genes. (2051 of such cells)
+#filter by MT
+keep_feature <- se$pct_counts_MT < 10
+se <- se[,keep_feature]
+dim(se)
+```
+```{r}
+plotColData(se, x="total_features_by_counts_endogenous", y="pct_counts_MT")
+#abline(h = 10, col = "red")
+```
+```{r}
+#filter by molecule counts
+keep_feature <- se$total_counts < 10000
+se <- se[,keep_feature]
+dim(se)
+```
+```{r}
+#total_features_by_counts_endogenous
+keep_feature <- se$total_features_by_counts_endogenous < 1000
+se <- se[,keep_feature]
+dim(se)
+```
+```{r}
+assay(se, "logcounts") <- log2(counts(se) + 1)
+se <- plotPCA(se)
 ```
 
 
