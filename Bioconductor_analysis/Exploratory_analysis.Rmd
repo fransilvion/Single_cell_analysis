@@ -28,7 +28,7 @@ library(Matrix)
 ```
 [10X Genomics](https://ucdavis-bioinformatics-training.github.io/2017_2018-single-cell-RNA-sequencing-Workshop-UCD_UCB_UCSF/day1/Expression_Matrix.html)
 
-Analysis of Francis's data: differentiation of hESC towards DE; one time point - 36 hours. 
+Analysis of Francis's data: differentiation of hESC towards DE; one time point - 36 hours. 10X Genomics data, The 10X Genomics Chromium system analyses the 3'-ends of transcripts. This leads to a more cost effective analysis of gene expression from thousands of cells. 
 
 Samples:
 
@@ -81,9 +81,26 @@ barcode.names <-  read.delim(barcode.path,
 colnames(mat) <-  barcode.names$V1
 rownames(mat) <-  feature.names$V1
 
+#rm(barcode.names, feature.names)
+
 #doing all this in one line
-#read10X(mtx = "../Sox17Ng_36h_German/filtered_feature_bc_matrix/matrix.mtx.gz", genes = #"../Sox17Ng_36h_German/filtered_feature_bc_matrix/features.tsv.gz", barcodes = #"../Sox17Ng_36h_German/filtered_feature_bc_matrix/barcodes.tsv.gz", path = NULL, DGEList = FALSE)
+#molecules <- read10X(mtx = "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/matrix.mtx.gz", genes =
+#            "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/features.tsv.gz", barcodes =
+#            "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/barcodes.tsv.gz", path = NULL, DGEList = FALSE)
+
 ```
+
+We didn't use any spike-ins. 
+```{r}
+umi <- SingleCellExperiment(assays = list(counts = mat))
+umi
+```
+```{r}
+keep_feature <- rowSums(counts(umi) > 0) > 0
+umi <- umi[keep_feature, ]
+dim(umi)
+```
+
 
 Mat is sparse matrix that has only positions of non-zero elements
 ```{r}
@@ -91,12 +108,6 @@ Mat is sparse matrix that has only positions of non-zero elements
 mat <- na.omit(mat)
 mat <- mat[rowSums(mat)>0,]
 dim(mat)
-```
-
-We (probably) didn't use any spike-ins. 
-```{r}
-se <- SingleCellExperiment(assays = list(counts = mat))
-se
 ```
 ```{r}
 #converting gene column to actual gene symbols (removing GRCh38____)
@@ -107,7 +118,8 @@ feature.names$V4 <- x
 rm(x)
 ```
 
-Define control features (genes) - mitochondrial genes (and we don't have ERCC spike-ins).
+Define control features (genes) - mitochondrial genes from [here](http://jdblischak.github.io/singleCellSeq/analysis/qc-filter-ipsc.html).
+
 ```{r}
 mitochondrial_genes <- c("GRCh38_____ENSG00000198899", "GRCh38_____ENSG00000198727", "GRCh38_____ENSG00000198888",
     "GRCh38_____ENSG00000198886", "GRCh38_____ENSG00000212907", "GRCh38_____ENSG00000198786",
@@ -116,37 +128,46 @@ mitochondrial_genes <- c("GRCh38_____ENSG00000198899", "GRCh38_____ENSG000001987
     "GRCh38_____ENSG00000198840")
 
 
-isSpike(se, "MT") <- rownames(se) %in% mitochondrial_genes
+isSpike(umi, "MT") <- rownames(umi) %in% mitochondrial_genes
 ```
 
 Calculate the quality metrics:
 ```{r}
-se <- calculateQCMetrics(
-    se,
+umi <- calculateQCMetrics(
+    umi,
     feature_controls = list( 
-        MT = isSpike(se, "MT")
+        MT = isSpike(umi, "MT")
     )
 )
 ```
 Next we consider the total number of RNA molecules (since we have UMI here) detected per sample. Wells with few reads/molecules are likely to have been broken or failed to capture a cell, and should thus be removed.
 ```{r}
 hist(
-    se$total_counts,
+    umi$total_counts,
     breaks = 100
 )
 abline(v = 10000, col = "red")
 ```
 (2700 cells have UMI counts more than 10000...).
-
-In addition to ensuring sufficient sequencing depth for each sample, we also want to make sure that the reads are distributed across the transcriptome. Thus, we count the total number of unique genes detected in each sample.
 ```{r}
+table(umi$total_counts > 10000)
+```
+
+In addition to ensuring sufficient sequencing depth for each sample, we also want to make sure that the reads are distributed across the transcriptome. Thus, we count the total number of unique genes detected in each sample. 
+
+The average number of genes detected per cell really depends on the cell type. Large, fast growing cells like those from culture or from tumours will often have 5,000 or more genes detected per cell on average. Primary immune cells that are smaller, and less transcriptionally active may only have 1,000 to 3,000 genes detected per cell.
+```{r}
+#total_features_by_counts - the number of genes that have expression values above the detection limit
 hist(
-    se$total_features_by_counts_endogenous,
+    umi$total_features_by_counts,
     breaks = 100
 )
-abline(v = 1000, col = "red")
+abline(v = 3000, col = "red")
 ```
-(2655 cells have more than 3000 of identified genes...).
+(2659 cells have more than 3000 of identified genes...).
+```{r}
+table(umi$total_features_by_counts > 3000)
+```
 
 Ratio between MT gene RNAs and endogenous RNAs:
 ```{r}
@@ -183,7 +204,16 @@ dim(se)
 ```
 ```{r}
 assay(se, "logcounts") <- log2(counts(se) + 1)
-se <- plotPCA(se)
+sepca <- plotPCA(se,
+              size_by = "total_features_by_counts"
+              #pca_data_input = "pdata",
+              #detect_outliers = TRUE
+              #return_SCE = TRUE
+)
+sepca
+```
+```{r}
+plotHighestExprs(se)
 ```
 
 
