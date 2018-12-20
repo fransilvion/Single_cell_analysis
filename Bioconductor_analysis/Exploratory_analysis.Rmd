@@ -22,6 +22,7 @@ library(RColorBrewer)
 library(dplyr)
 library(edgeR)
 library(scater)
+library(scran)
 
 #for feature-barcode-matrix loading
 library(Matrix)
@@ -339,15 +340,15 @@ There is no relationship between gene length and mean expression (in terms of UM
 
 READ AND EXPLORE - WHAT IS THE BEST NORMALIZATION STRATEGY. IS IT [RUV](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4404308/)?
 
-CPM:
+Scran normalization (GO WITH IT):
 ```{r}
-logcounts(umi) <- log2(calculateCPM(umi, use_size_factors = FALSE) + 1)
-
+qclust <- quickCluster(umi, min.size = 30)
+umi <- computeSumFactors(umi, sizes = 15, clusters = qclust)
+umi <- normalize(umi)
+```
+```{r}
 x <- runPCA(
-    umi[endog_genes, ],
-    exprs_values = "logcounts",
-    #size_by = "total_features_by_counts",
-    ntop = 500
+    umi[endog_genes, ]
 )
 
 plotPCA(
@@ -355,27 +356,41 @@ plotPCA(
     size_by = "total_features_by_counts"
 )
 ```
-
 ```{r}
-x <- runTSNE(
-    umi[endog_genes, ],
-    exprs_values = "logcounts",
-    #perplexity = 600,
-    #colour_by = "batch",
-    #size_by = "total_features_by_counts",
-    #shape_by = "individual",
-    set.seed = 123456
-)
 plotTSNE(x)
 ```
 ```{r}
-x <- normaliseExprs(
-    umi,
-    method = "RLE", 
-    feature_set = endog_genes,
-    return_log = TRUE,
-    return_norm_as_exprs = TRUE
+plotRLE(
+    umi[endog_genes, ], 
+    exprs_mats = list(scran = "logcounts"),
+    exprs_logged = c(TRUE)
 )
 ```
+```{r}
+plotRLE(
+    umi[endog_genes, ], 
+    exprs_mats = list(raw = "counts"),
+    exprs_logged = c(FALSE)
+)
+```
+```{r}
+
+for(n in assayNames(umi)) {
+    print(
+        plotExplanatoryVariables(
+            umi[endog_genes, ],
+            #type = "expl",
+            exprs_values = n,
+            variables = c(
+              "total_features_by_counts",
+              "total_counts",
+              "pct_counts_MT"
+              )
+        ) +
+        ggtitle(n)
+    )
+}
+```
+
 
 
