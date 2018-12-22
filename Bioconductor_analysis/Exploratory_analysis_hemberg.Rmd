@@ -80,9 +80,9 @@ Loading the data:
 #UMI counts are not normalized
 matrix_dir <-  "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/"
 
-barcode.path <- paste0(matrix_dir, "barcodes.tsv.gz")
-features.path <- paste0(matrix_dir, "features.tsv.gz")
-matrix.path <- paste0(matrix_dir, "matrix.mtx.gz")
+barcode.path <- paste0(matrix_dir, "barcodes.tsv")
+features.path <- paste0(matrix_dir, "features.tsv")
+matrix.path <- paste0(matrix_dir, "matrix.mtx")
 
 mat <- readMM(file = matrix.path)
 feature.names <- read.delim(features.path, 

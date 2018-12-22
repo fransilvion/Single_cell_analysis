@@ -1,0 +1,199 @@
+---
+title: "Exploratory analysis pipeline; Seurat"
+author: "German Novakovskiy"
+date: "December 21, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo=FALSE, results='hide'}
+library(Seurat)
+library(dplyr)
+
+```
+Followed by [this tutorial](https://satijalab.org/seurat/pbmc3k_tutorial.html).
+
+## Setup the Seurat Object
+
+```{r}
+#Loading the data
+data.dir <-  "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/"
+esc.data <- Read10X(data.dir = data.dir)
+
+#for visualization purporse
+x <- row.names(esc.data)
+x <- sapply(x, function(x){unlist(strsplit(x, split = "_____"))[2]})
+names(x) <- NULL
+x[1] <- "Neogreen"
+
+rownames(esc.data) <- x
+rm(x)
+
+# Initialize the Seurat object with the raw (non-normalized data).  Keep all
+# genes expressed in >= 7 cells (~0.1% of the data). Keep all cells with at
+# least 200 detected genes
+esc <- CreateSeuratObject(raw.data = esc.data, min.cells = 7, min.genes = 200, 
+    project = "10X_ESC")
+```
+
+## QC and selecting cells for further analysis
+
+```{r}
+# The number of genes and UMIs (nGene and nUMI) are automatically calculated
+# for every object by Seurat.  For non-UMI data, nUMI represents the sum of
+# the non-normalized values within a cell We calculate the percentage of
+# mitochondrial genes here and store it in percent.mito using AddMetaData.
+# We use object@raw.data since this represents non-transformed and
+# non-log-normalized counts The % of UMI mapping to MT-genes is a common
+# scRNA-seq QC metric.
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = esc@data), value = TRUE)
+percent.mito <- Matrix::colSums(esc@raw.data[mito.genes, ])/Matrix::colSums(esc@raw.data)
+
+# AddMetaData adds columns to object@meta.data, and is a great place to
+# stash QC stats
+esc <- AddMetaData(object = esc, metadata = percent.mito, col.name = "percent.mito")
+VlnPlot(object = esc, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3, point.size.use = 0.005)
+```
+
+```{r}
+# GenePlot is typically used to visualize gene-gene relationships, but can
+# be used for anything calculated by the object, i.e. columns in
+# object@meta.data, PC scores etc.  Since there is a rare subset of cells
+# with an outlier level of high mitochondrial percentage and also low UMI
+# content, we filter these as well
+par(mfrow = c(1, 2))
+GenePlot(object = esc, gene1 = "nUMI", gene2 = "percent.mito")
+GenePlot(object = esc, gene1 = "nUMI", gene2 = "nGene")
+```
+
+```{r}
+# We filter out cells that have unique gene counts over 2,500 or less than
+# 200 Note that low.thresholds and high.thresholds are used to define a
+# 'gate'.  -Inf and Inf should be used if you don't want a lower or upper
+# threshold.
+esc <- FilterCells(object = esc, subset.names = c("nGene", "percent.mito"), 
+    low.thresholds = c(200, -Inf), high.thresholds = c(Inf, 0.05))
+```
+
+
+## Normalizing the data
+
+After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. (Thin about Scran normalization from hemberg approach).
+```{r}
+esc <- NormalizeData(object = esc, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+```
+
+## Detection of variable genes across the single cells
+
+Seurat calculates highly variable genes and focuses on these for downstream analysis. FindVariableGenes calculates the average expression and dispersion for each gene, places these genes into bins, and then calculates a z-score for dispersion within each bin. This helps control for the relationship between variability and average expression. This function is unchanged from (Macosko et al.), but new methods for variable gene expression identification are coming soon. We suggest that users set these parameters to mark visual outliers on the dispersion plot, but the exact parameter settings may vary based on the data type, heterogeneity in the sample, and normalization strategy. The parameters here represent typical parameter settings for UMI data that is normalized to a total of 1e4 molecules:
+```{r}
+esc <- FindVariableGenes(object = esc, mean.function = ExpMean, dispersion.function = LogVMR, 
+    x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+```
+```{r}
+length(x = esc@var.genes)
+```
+
+## Scaling the data and removing unwanted sources of variation
+
+Our single cell dataset likely contains ‘uninteresting’ sources of variation. This could include not only technical noise, but batch effects, or even biological sources of variation (cell cycle stage). Regressing these signals [out](https://stats.stackexchange.com/questions/3944/explain-model-adjustment-in-plain-english) of the analysis can improve downstream dimensionality reduction and clustering. 
+
+We check the cell cycle for confounding effect. And then scale data for UMI counts, MT genes and difference in proliferating cycles (S and G2/M). We should regress out the difference between the G2M and S phase scores. This means that signals separating non-cycling cells and cycling cells will be maintained, but differences in cell cycle phase amongst proliferating cells (which are often uninteresting), will be regressed out of the data (because we have stem cells):
+```{r}
+#cell cycle markers
+cc.genes <- readLines(con = "cell_cycle_vignette_files/regev_lab_cell_cycle_genes.txt")
+#cc.genes <- sapply(cc.genes, function(x){ paste("GRCh38_____", x, sep="")})
+#names(cc.genes) <- NULL
+
+# We can segregate this list into markers of G2/M phase and markers of S
+# phase
+s.genes <- cc.genes[1:43]
+g2m.genes <- cc.genes[44:97]
+
+esc <- ScaleData(object = esc, display.progress = FALSE)
+#only NASP is in PC4, there are no other genes, related to cell-cycle; however a lot of are MT genes, which is expected
+esc <- RunPCA(object = esc, pc.genes = esc@var.genes, pcs.print = 1:4, 
+    genes.print = 10)
+```
+```{r}
+esc <- CellCycleScoring(object = esc, s.genes = s.genes, g2m.genes = g2m.genes, 
+    set.ident = TRUE)
+
+# view cell cycle scores and phase assignments
+head(x = esc@meta.data)
+```
+```{r}
+esc <- RunPCA(object = esc, pc.genes = c(s.genes, g2m.genes), do.print = FALSE)
+PCAPlot(object = esc)
+```
+For each gene, Seurat models the relationship between gene expression and the S and G2M cell cycle scores. The scaled residuals of this model represent a ‘corrected’ expression matrix, that can be used downstream for dimensional reduction.
+
+```{r}
+esc@meta.data$CC.Difference <- esc@meta.data$S.Score - esc@meta.data$G2M.Score
+#esc <- ScaleData(object = esc, vars.to.regress = c("nUMI", "percent.mito", "CC.Difference"), display.progress = FALSE)
+esc <- ScaleData(object = esc, vars.to.regress = c("nUMI", "percent.mito"), display.progress = FALSE)
+
+esc <- RunPCA(object = esc, pc.genes = c(s.genes, g2m.genes), do.print = FALSE)
+PCAPlot(object = esc)
+```
+
+## Linear dimensional reduction
+
+Running dimensionality reduction on highly variable genes can improve performance. However, with UMI data - particularly after regressing out technical variables, PCA returns similar (albeit slower) results when run on much larger subsets of genes, including the whole transcriptome.
+
+```{r}
+esc <- RunPCA(object = esc, pc.genes = esc@var.genes, do.print = TRUE, pcs.print = 1:4, 
+    genes.print = 10)
+```
+```{r}
+#x <- esc@meta.data
+#x <- x[ , !(names(x) %in% c("Phase"))]
+#esc@meta.data <- x
+PCAPlot(object = esc, dim.1 = 1, dim.2 = 2, cols.use=NULL)
+```
+```{r,warning=FALSE}
+PCHeatmap(object = esc, pc.use = 1, cells.use = 500, do.balanced = TRUE, label.columns = FALSE)
+```
+```{r, warning=FALSE}
+PCHeatmap(object = esc, pc.use = 1:12, cells.use = 500, do.balanced = TRUE, 
+    label.columns = FALSE, use.full = FALSE)
+```
+```{r}
+PCElbowPlot(object = esc)
+```
+
+## Clustering and t-SNE
+
+```{r}
+esc <- FindClusters(object = esc, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+
+esc <- RunTSNE(object = esc, dims.use = 1:10, do.fast = TRUE)
+
+TSNEPlot(object = esc)
+```
+
+```{r}
+# find markers for every cluster compared to all remaining cells, report
+# only the positive ones
+esc.markers <- FindAllMarkers(object = esc, only.pos = TRUE, min.pct = 0.25, 
+    thresh.use = 0.25)
+esc.markers %>% group_by(cluster) %>% top_n(2, avg_logFC)
+```
+```{r}
+VlnPlot(object = esc, features.plot = c("EOMES"))
+```
+```{r}
+FeaturePlot(object = esc, features.plot = c("CER1", "EOMES", "GATA6", "LHX1"), cols.use = c("grey", "blue"), 
+    reduction.use = "tsne")
+```
+
+```{r}
+FeaturePlot(object = esc, features.plot = c("SOX2", "NANOG", "CDH1", "DPPA4"), cols.use = c("grey", "blue"), 
+    reduction.use = "tsne")
+```
