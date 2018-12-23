@@ -81,7 +81,7 @@ Loading the data:
 matrix_dir <-  "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/"
 
 barcode.path <- paste0(matrix_dir, "barcodes.tsv")
-features.path <- paste0(matrix_dir, "features.tsv")
+features.path <- paste0(matrix_dir, "genes.tsv")
 matrix.path <- paste0(matrix_dir, "matrix.mtx")
 
 mat <- readMM(file = matrix.path)
