@@ -1,0 +1,329 @@
+---
+title: "Exploratory analysis, Sethi"
+author: "German Novakovskiy"
+date: "December 23, 2018"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+library(M3Drop)
+library(SingleCellExperiment)
+library(ggplot2)
+library(gridExtra)
+library(Rtsne)
+```
+
+Based on this [tutorial](https://ppapasaikas.github.io/BC2_SingleCell/).
+
+## Loading the data
+
+```{r}
+matrix_dir <-  "../../Sox17Ng_36h_German/filtered_feature_bc_matrix/"
+
+barcode.path <- paste0(matrix_dir, "barcodes.tsv")
+features.path <- paste0(matrix_dir, "genes.tsv")
+matrix.path <- paste0(matrix_dir, "matrix.mtx")
+
+mat <- readMM(file = matrix.path)
+feature.names <- read.delim(features.path, 
+                           header = FALSE,
+                           stringsAsFactors = FALSE)
+barcode.names <-  read.delim(barcode.path, 
+                           header = FALSE,
+                           stringsAsFactors = FALSE)
+
+x <- feature.names$V1
+x <- sapply(x, function(x){ unlist(strsplit(x, "_____", fixed=TRUE))[2]})
+x[1] <- 'mNeonGreen'
+names(x) <- NULL
+
+genes <- feature.names$V2
+genes <- sapply(genes, function(x){ unlist(strsplit(x, "_____", fixed=TRUE))[2]})
+genes[1] <- 'mNeonGreen'
+names(genes) <- x
+
+colnames(mat) <-  barcode.names$V1
+rownames(mat) <-  x
+
+umi <- SingleCellExperiment(assays = list(counts = mat))
+umi
+```
+
+```{r}
+mitochondrial_genes <- c("ENSG00000198899", "ENSG00000198727", "ENSG00000198888",
+    "ENSG00000198886", "ENSG00000212907", "ENSG00000198786",
+    "ENSG00000198695", "ENSG00000198712", "ENSG00000198804",
+    "ENSG00000198763", "ENSG00000228253", "ENSG00000198938",
+    "ENSG00000198840")
+
+isSpike(umi, "MT") <- rownames(umi) %in% mitochondrial_genes
+```
+
+```{r}
+umi_counts <- as.matrix(counts(umi))
+hist(colSums(umi_counts)/1e6, xlab="Library size (millions)", breaks=20, col="grey80", ylab="Number of cells")
+```
+
+```{r}
+#Sort genes in decreasing order in terms of their expression
+ReadsPerGene <- sort(rowSums(umi_counts),decreasing=TRUE) 
+
+#Cumulative fraction of reads for the sorted genes:
+CumulFraction <- cumsum(ReadsPerGene)/sum(ReadsPerGene) 
+
+#Fraction of reads coming from the top N genes calculated per cell: 
+N <- 25
+topN <- names(ReadsPerGene)[1:N]
+ReadFraction <- apply(umi_counts, 2, function(x) x[ topN ]/sum(x)  ) 
+
+#Percentage of reads coming from the top N genes:
+f <- signif(CumulFraction[N]*100,digits=3) 
+
+#Produce a boxplot for the fraction of reads coming from the top N genes:
+title <- paste("Top ", N,  " genes acccount for ", f, "% of the endogenous  reads",sep="")
+
+boxplot(ReadFraction[N:1,],use.cols=FALSE,horizontal=TRUE,outline=FALSE,
+boxwex=0.5,names=rev(genes[topN]),col="orange", main=title,
+las=2,par(cex.axis=0.6,cex.main=0.9), xlab="Fraction of Reads in Cell")
+```
+```{r}
+#Normalize for library size (only endogenous genes) and convert to CPMs:
+norm_umi_counts <- sweep(umi_counts,2,colSums(umi_counts),FUN="/")*1e6 
+```
+
+
+## Cell filtering
+
+Number of detected genes: In a plot of the number of the detected genes of the cells vs the corresponding rank we often observe a point of sudden drop (a shoulder). Numbers below that point might indicate damaged cells:
+```{r}
+#Number of detected genes:
+NODG <- colSums(umi_counts>0)
+
+#Plot NODGs ordered by rank  (rank-size distribution)
+plot(rank(-NODG), NODG, pch=19,xlab="Cell rank" )
+
+#Threshold cells with low NODG:
+abline(3000,0,col="red")
+```
+```{r}
+low_NODG <- which(NODG<3000)
+```
+
+Fraction of MT reads: As noted previously high fractions of MT reads might indicate damaged cells. We will look, as in the case of number of detected genes, for a point in the plot where the fraction of MT reads of the cells when sorted by their rank appear to rise sharply:
+```{r}
+#Calculate fraction of MT reads per cell:
+fractionMTreads <- colSums(umi_counts[mitochondrial_genes,])/colSums(umi_counts)
+
+#Plot fraction of MT reads ordered by rank  (rank-size distribution)
+plot (rank(fractionMTreads), fractionMTreads,pch=19,xlab="Cell rank" )
+
+#Threshold cells with high fraction of MTreads:
+abline(0.05,0,col="red")
+```
+```{r}
+high_MT <- which(fractionMTreads>0.05)
+```
+
+We will now combine the three applied filters to obtain a list of all cells that will be removed and obtain filtered versions of our data:
+
+```{r}
+#Merge all filtered cells:
+filtered_cells <- unique(c(low_NODG,high_MT))
+
+#Remove filtered cells from the dataset:
+clean_umi_counts <- umi_counts[,-filtered_cells]
+clean_norm_umi_counts <- norm_umi_counts[,-filtered_cells] 
+umi <- umi[,-filtered_cells]
+```
+
+Let’s check the result of our cell filtering in a plot that combines information about library size, number of detected genes and proportion of MT reads:
+```{r}
+#Lof transformed umi counts:
+Log_library_size <- log2(colSums(umi_counts))
+
+#Point size proportional to library size :
+point.size <- 0.25 + ( Log_library_size -min( Log_library_size  ) )/  diff(range( Log_library_size ) )   
+
+#Set a different color for the filtered cells:
+col <- rep("red",ncol(umi_counts))
+col[filtered_cells]="blue" 
+
+#Plot the fraction of MT reads as a function of the number of detected genes
+plot(log2(colSums(umi_counts>0)),colSums(umi_counts[mitochondrial_genes,])/colSums(umi_counts), pch=19,cex=point.size,col=col,xlab="Log2(Number of Detected Genes)", ylab="Fraction of MT reads")
+```
+
+## Gene filtering
+
+The goal here is to throw out genes that offer no information as to the biological variance of the cells. We will now work on the cell-filtered version of our data. A first simple gene filter is to remove all genes that are not detected in ANY of the remaining cells:
+
+```{r}
+#Identify genes absent in all cels:
+absent_genes <- which(rowSums(clean_umi_counts)==0)
+
+#Remove absent genes from dataset:
+clean_umi_counts <- clean_umi_counts[-absent_genes,]
+clean_norm_umi_counts <- clean_norm_umi_counts[-absent_genes,] 
+#endog <- setdiff(endog,rownames(umi_counts)[absent_genes])
+umi <- umi[-absent_genes,]
+```
+
+A second more elaborate filter will aim to remove genes that do not present cell-to-cell fluctuations above what is expected due to technical variation. One possible approach would be to use the mean-variance trend fit constructed above and keep only genes falling above the fitted line:
+```{r}
+#calculate the genes' mean expresion (with pseudocounts):
+mean_GE <- rowMeans(clean_norm_umi_counts+1/ncol(clean_norm_umi_counts))
+
+#calculate the genes' coefficient of variation for:
+gene_cv <- apply(clean_norm_umi_counts,1, function(x) sd(x)/mean(x+1/length(x)) )
+
+#Log transform expression and cv:
+X1 <- log2(mean_GE)
+Y1 <- log2(gene_cv+1/ncol(clean_norm_umi_counts))
+
+#linear fit of log(cv) as a function of log(gene expression):
+m <- lm(Y1 ~ X1)
+
+##Set the color of all underdispersed points to gray:
+Yhat <- predict(m)
+col <- rep("black",length(Y1))
+col[which(Yhat>Y1)] <- "grey"
+
+#scatterplot of log(cv) as a function of log(mean expression):
+plot(X1,Y1,xlab="log2(mean gene expression)",ylab="log2(coefficent of variation)" ,main="mean-variance trend",pch=19 ,col=col)
+#Add Linear regression  fit on the data:
+abline(coef(m)[1],coef(m)[2],col="red",lwd=2,lty=2)
+```
+
+A popular method to correct for the relationship between variance and mean expression was proposed by Brennecke et al.. To use the Brennecke method, we first normalize for library size then calculate the mean and the square coefficient of variation (variation divided by the squared mean expression). A quadratic curve is fit to the relationship between these two variables for the ERCC spike-in, and then a chi-square test is used to find genes significantly above the curve. This method is included in the M3Drop package as the Brennecke_getVariableGenes(counts, spikes) function. However, this dataset does not contain spike-ins so we will use the entire dataset to estimate the technical noise.
+
+In the figure below the red curve is the fitted technical noise model and the dashed line is the 95% CI. Pink dots are the genes with significant biological variability after multiple-testing correction.
+```{r}
+Brennecke_HVG <- BrenneckeGetVariableGenes(
+    clean_norm_umi_counts, # Normalized & filtered expression matrix
+    fdr = 0.01,
+    minBiolDisp = 0.5
+)
+```
+```{r}
+#save it before DE analysis
+HVG_genes <- Brennecke_HVG
+HVG_genes_true <- genes[Brennecke_HVG]
+
+rib.prot <- genes[grep("^RP",genes)]
+keep_genes <- rownames(clean_umi_counts)
+keep_genes <- keep_genes[keep_genes %in% HVG_genes]
+keep_genes <- keep_genes[!keep_genes %in% c(rib.prot, mitochondrial_genes)]
+#mitochondrial_genes
+```
+
+## PCA
+
+We will try PCA without any filter for dispersion feeding a simple log transformation of the count matrix: First let’s perform PCA and look at the proportion of explained variance by the first 50 components:
+```{r}
+#Log transform the data:
+LogTransf_counts <- log2(clean_norm_umi_counts+1)
+
+#Apply PCA
+#Note that for prcomp we need to pass a transposed version of the matrix where cells are the rows and genes the columns
+PCA_noSel <- prcomp(x=t(LogTransf_counts),scale=T) 
+
+#Plot  the cumuluative proportion of explained variance by the first 50 components:
+plot(summary(PCA_noSel)$importance[3,1:50],type="l",xlab="#PC (LogTrans. Data)",ylab="Cum. Proportion of Explained Variance")
+```
+```{r}
+# Calculate also the number of detected genes (to use later in plotting)
+Log_NODG <- log2(colSums(clean_norm_umi_counts>0)+1) 
+# to ease plotting combine results in a dataframe 
+datt <- data.frame(logNODG=Log_NODG, PCA_noSel=PCA_noSel$x[,1:2])  
+```
+
+```{r}
+#Store a plot of the projection colored by NODGs:
+chart_logNODG <- ggplot(datt,aes(x=PCA_noSel.PC1,y=PCA_noSel.PC2,color=logNODG))+
+scale_color_gradient(low="#FF5544",high="#4455FF") + geom_point(size=4,alpha=0.8)
+
+#View the two plots arranged one below the other:
+grid.arrange(chart_logNODG, ncol=1)
+```
+
+We will now see what is the effect on selecting overdispersed genes prior to PCA.
+```{r}
+#Select the top 25% of overdispersed genes:
+genes_keep <- keep_genes
+
+#Log transform the data:
+LogTransf_counts <- log2(clean_norm_umi_counts[genes_keep ,]+1)
+
+#Apply PCA
+#Note that for prcomp we need to pass a trnasposed version of the matrix where cells are the rows and genes the columns
+PCA_Sel=prcomp(x=t(LogTransf_counts),scale=T) 
+
+#Plot  the cumuluative proportion of explained variance by the first 50 components:
+plot(summary(PCA_Sel)$importance[3,1:50],type="l",xlab="#PC (LogTrans. Data)",ylab="Cum. Proportion of Explained Variance")
+```
+
+```{r}
+# To ease plotting combine results in a dataframe :
+datt <- data.frame(logNODG=Log_NODG,PCA_Sel=PCA_Sel$x[,1:2])  
+```
+
+Let’s view the projections again… First using the PCA on the Log transformed data:
+
+```{r}
+#Store a plot of the projection colored by NODGs:
+chart_logNODG <- ggplot(datt,aes(x=PCA_Sel.PC1,y=PCA_Sel.PC2,color=logNODG))+
+scale_color_gradient(low="#FF5544",high="#4455FF")+geom_point(size=4,alpha=0.8)
+
+#View the two plots arranged one below the other:
+grid.arrange(chart_logNODG, ncol=1)
+```
+
+Proves that we don't need to select only variable genes
+
+Now PCA with all genes except Mito and ribo.
+```{r}
+ribo_mito <- c(names(rib.prot), mitochondrial_genes)
+#Log transform the data:
+keep_genes <- !rownames(clean_norm_umi_counts) %in% ribo_mito
+LogTransf_counts <- log2(clean_norm_umi_counts[keep_genes,]+1)
+
+#Apply PCA
+#Note that for prcomp we need to pass a transposed version of the matrix where cells are the rows and genes the columns
+PCA_noSel <- prcomp(x=t(LogTransf_counts),scale=T) 
+
+#Plot  the cumuluative proportion of explained variance by the first 50 components:
+plot(summary(PCA_noSel)$importance[3,1:50],type="l",xlab="#PC (LogTrans. Data)",ylab="Cum. Proportion of Explained Variance")
+```
+```{r}
+# to ease plotting combine results in a dataframe 
+datt <- data.frame(logNODG=Log_NODG, PCA_noSel=PCA_noSel$x[,1:2])  
+```
+
+```{r}
+#Store a plot of the projection colored by NODGs:
+chart_logNODG <- ggplot(datt,aes(x=PCA_noSel.PC1,y=PCA_noSel.PC2,color=logNODG))+
+scale_color_gradient(low="#FF5544",high="#4455FF") + geom_point(size=4,alpha=0.8)
+
+#View the two plots arranged one below the other:
+grid.arrange(chart_logNODG, ncol=1)
+```
+
+## tSNE
+
+```{r}
+#Compute tSNE projection:
+tSNE <- Rtsne(X=PCA_noSel$x[,1:50],dim=2,perplexity=min(50,round(sqrt(nrow(PCA_noSel$x)))),theta=0.25,pca=F,is_distance = F)  
+
+#To ease plotting combine results in a dataframe:
+datt=data.frame(logNODG=Log_NODG,tSNE=tSNE$Y)  
+
+#Store a plot of the projection colored by NODGs:
+chart_tSNE1=ggplot(datt,aes(x=tSNE.1,y=tSNE.2,color=logNODG))+
+scale_color_gradient(low="#FF5544",high="#4455FF")+geom_point(size=4,alpha=0.8)
+
+#View the two plots arranged one below the other:
+grid.arrange(chart_tSNE1, ncol=1)
+```
+

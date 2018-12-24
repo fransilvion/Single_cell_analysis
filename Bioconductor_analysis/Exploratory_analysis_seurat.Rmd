@@ -242,6 +242,12 @@ FeaturePlot(object = esc, features.plot = c("CER1", "EOMES", "GATA6", "LHX1"), c
 FeaturePlot(object = esc, features.plot = c("MIXL1", "DKK4", "GSC", "DKK1"), cols.use = c("grey", "red"), 
     reduction.use = "tsne")
 ```
+For Neogreen
+```{r}
+FeaturePlot(object = esc, features.plot = c("Neogreen"), cols.use = c("grey", "red"), 
+    reduction.use = "tsne")
+```
+
 
 For stem cell markers: 
 ```{r}
