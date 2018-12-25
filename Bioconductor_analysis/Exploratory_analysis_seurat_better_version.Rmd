@@ -1,7 +1,7 @@
 ---
-title: "Exploratory analysis pipeline; Seurat"
+title: "Better pipeline with Seurat"
 author: "German Novakovskiy"
-date: "December 21, 2018"
+date: "December 24, 2018"
 output: github_document
 ---
 
@@ -14,6 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(Seurat)
 library(dplyr)
 ```
+
 Followed by [this tutorial](https://satijalab.org/seurat/pbmc3k_tutorial.html).
 
 ## Setup the Seurat Object
@@ -70,18 +71,18 @@ GenePlot(object = esc, gene1 = "nUMI", gene2 = "nGene", pch.use = 16, cex.use = 
 ```
 
 ```{r}
-# We filter out cells that have unique gene counts less than
+# We filter out cells that have unique gene counts ess than
 # 200 Note that low.thresholds and high.thresholds are used to define a
 # 'gate'.  -Inf and Inf should be used if you don't want a lower or upper
 # threshold.
 esc <- FilterCells(object = esc, subset.names = c("nGene", "percent.mito"), 
-    low.thresholds = c(200, -Inf), high.thresholds = c(Inf, 0.05))
+    low.thresholds = c(3000, -Inf), high.thresholds = c(Inf, 0.05))
 ```
 
 
 ## Normalizing the data
 
-After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. (Thin about Scran normalization from hemberg approach).
+After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. (Think about Scran normalization from hemberg approach).
 ```{r}
 esc <- NormalizeData(object = esc, normalization.method = "LogNormalize", 
     scale.factor = 10000)
@@ -151,6 +152,12 @@ esc <- RunPCA(object = esc, pc.genes = esc@var.genes, pcs.compute = 100, pcs.pri
 ```{r}
 PCAPlot(object = esc, dim.1 = 1, dim.2 = 2)
 ```
+```{r}
+esc <- RunPCA(object = esc, pc.genes = rownames(esc@data), pcs.compute = 100, pcs.print = 1:4, do.print=FALSE)
+```
+```{r}
+PCAPlot(object = esc, dim.1 = 1, dim.2 = 2)
+```
 
 ```{r}
 #x <- esc@meta.data
@@ -185,6 +192,10 @@ TSNEPlot(object = esc)
 ```{r}
 table(esc@ident) 
 ```
+```{r}
+PCAPlot(object = esc, dim.1 = 1, dim.2 = 2)
+```
+
 200 cells are in cluster 4, which is believed to be primitive streak
 
 Finding of bio markerks for each cluster:
@@ -194,7 +205,7 @@ Finding of bio markerks for each cluster:
 esc.markers <- FindAllMarkers(object = esc, only.pos = TRUE, min.pct = 0.25, 
     thresh.use = 0.25)
 
-esc.markers %>% group_by(cluster) %>% top_n(10, avg_logFC) %>% filter(cluster == 4)
+esc.markers %>% group_by(cluster) %>% top_n(10, avg_logFC) %>% filter(cluster == 2)
 ```
 
 Cluster 4 is full with mesoderm and primitive streak markers.
@@ -263,8 +274,8 @@ DoHeatmap(object = esc, genes.use = top10$gene, slim.col.label = TRUE, remove.ke
 ```
 
 ```{r}
-cluster4.markers <- FindMarkers(object = esc, ident.1 = 4, min.pct = 0.25)
-print(x = head(x = cluster4.markers, n = 5))
+cluster2.markers <- FindMarkers(object = esc, ident.1 = 2, min.pct = 0.25)
+print(x = head(x = cluster2.markers, n = 10))
 ```
 ```{r}
 cluster3.markers <- FindMarkers(object = esc, ident.1 = 3, min.pct = 0.25)
@@ -274,11 +285,93 @@ print(x = head(x = cluster3.markers, n = 10))
 
 For testing:
 ```{r}
-current.cluster.ids <- c(0, 1, 2, 3, 4)
-new.cluster.ids <- c("hESC", "hESC", "hESC", "CTNNB1+ cells", "APS")
+current.cluster.ids <- c(0, 1, 2, 3)
+new.cluster.ids <- c("hESC", "hESC", "APS", "CTNNB1+ cells")
 x <- esc
 x@ident <- plyr::mapvalues(x = x@ident, from = current.cluster.ids, to = new.cluster.ids)
 TSNEPlot(object = x, do.label = TRUE, pt.size = 0.5, label.size = 6)
 ```
 
 Among negative markers for APS cluster are hESC markerks: SOX2, NANOG, POU5F1, DPPA4. For CTNNB1+ cluster there is only one negative marker - CER1. Probably, CTNNB1+ cells, are intermidiate step from hESC to APS.
+
+## Additional testing
+
+Using all 100 dimensions reveals only two clusters:
+```{r}
+esc <- FindClusters(object = esc, reduction.type = "pca", dims.use = 1:100, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+
+esc <- RunTSNE(object = esc, dims.use = 1:100, do.fast = TRUE)
+
+TSNEPlot(object = esc)
+```
+```{r}
+table(esc@ident) 
+```
+```{r}
+PCAPlot(object = esc, dim.1 = 1, dim.2 = 2)
+```
+
+```{r}
+cluster0.markers <- FindMarkers(object = esc, ident.1 = 0, min.pct = 0.25)
+print(x = head(x = cluster0.markers, n = 10))
+```
+```{r}
+cluster1.markers <- FindMarkers(object = esc, ident.1 = 1, min.pct = 0.25)
+print(x = head(x = cluster1.markers, n = 10))
+```
+```{r}
+#markers distinguishing cluster 1 from clusters 0 
+cluster1.markers <- FindMarkers(object = esc, ident.1 = 1, ident.2 = c(0), 
+    min.pct = 0.25)
+print(x = head(x = cluster1.markers, n = 10))
+```
+```{r}
+#markers distinguishing cluster 0 from clusters 1
+cluster0.markers <- FindMarkers(object = esc, ident.1 = 0, ident.2 = c(1), 
+    min.pct = 0.25)
+print(x = head(x = cluster0.markers, n = 10))
+```
+
+## GO analysis 
+
+For GO analysis with GOrilla of markers of cluster 0 and 1:
+```{r}
+x <- rownames(cluster0.markers)
+y <- rownames(cluster1.markers) #they are equal
+
+#bg list
+z <- rownames(as.matrix(esc@data))
+
+#write to file
+fileConn<-file("Bg.txt")
+writeLines(z, fileConn)
+close(fileConn)
+```
+We have enriched protein folding, protein stabiliation, telomerase stability, toxin transport and others.
+
+## Continue with analysis
+
+```{r}
+library(tibble)
+cluster3.markers <- FindMarkers(object = esc, ident.1 = 2, thresh.use = 0.25, 
+                                 test.use = "roc", only.pos = TRUE)
+cluster3.markers %>% rownames_to_column("Genes") %>% filter(power > 0.8) %>% dplyr::select("Genes")
+```
+Main markers.
+
+RAZBERIS!!! - GSEA. PLUS WHAT HAPPENS AGAIN IF YOU INCLUDE RIB AND MITO GENES?
+```{r}
+cluster2.markers <- FindMarkers(object = esc, ident.1 = 2, min.pct = 0.25)
+print(x = head(x = cluster2.markers, n = 10))
+```
+
+```{r}
+esc <- FindClusters(object = esc, reduction.type = "pca", dims.use = 1:20, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+
+esc <- RunTSNE(object = esc, dims.use = 1:20, do.fast = TRUE)
+
+TSNEPlot(object = esc)
+```
+
