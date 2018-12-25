@@ -116,7 +116,9 @@ s.genes <- cc.genes[1:43]
 g2m.genes <- cc.genes[44:97]
 
 esc <- ScaleData(object = esc, display.progress = FALSE)
-#only NASP is in PC4, there are no other genes, related to cell-cycle; however a lot of are MT genes, which is expected
+
+#esc <- RunPCA(object = esc, pc.genes = rownames(esc@data), pcs.print = 1:4, 
+#    genes.print = 10)
 esc <- RunPCA(object = esc, pc.genes = esc@var.genes, pcs.print = 1:4, 
     genes.print = 10)
 ```
@@ -285,8 +287,8 @@ print(x = head(x = cluster3.markers, n = 10))
 
 For testing:
 ```{r}
-current.cluster.ids <- c(0, 1, 2, 3)
-new.cluster.ids <- c("hESC", "hESC", "APS", "CTNNB1+ cells")
+current.cluster.ids <- c(0, 1, 2, 3, 4)
+new.cluster.ids <- c("hESC", "hESC", "APS", "hESC", 'hESC')
 x <- esc
 x@ident <- plyr::mapvalues(x = x@ident, from = current.cluster.ids, to = new.cluster.ids)
 TSNEPlot(object = x, do.label = TRUE, pt.size = 0.5, label.size = 6)
