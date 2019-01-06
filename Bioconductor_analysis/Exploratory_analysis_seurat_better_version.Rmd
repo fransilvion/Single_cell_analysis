@@ -197,6 +197,10 @@ table(esc@ident)
 ```{r}
 PCAPlot(object = esc, dim.1 = 1, dim.2 = 2)
 ```
+```{r}
+saveRDS(esc, file = "esc_seurat.rds")
+```
+
 
 200 cells are in cluster 4, which is believed to be primitive streak
 
@@ -310,6 +314,11 @@ TSNEPlot(object = esc)
 ```{r}
 table(esc@ident) 
 ```
+```{r}
+saveRDS(esc, file = "esc_seurat_3.rds")
+```
+
+
 ```{r}
 PCAPlot(object = esc, dim.1 = 1, dim.2 = 2)
 ```

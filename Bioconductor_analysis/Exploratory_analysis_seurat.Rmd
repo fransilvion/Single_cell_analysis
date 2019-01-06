@@ -186,6 +186,10 @@ TSNEPlot(object = esc)
 table(esc@ident) 
 ```
 200 cells are in cluster 4, which is believed to be primitive streak
+```{r}
+saveRDS(esc, file="bad_esc.rds")
+```
+
 
 Finding of bio markerks for each cluster:
 ```{r}
